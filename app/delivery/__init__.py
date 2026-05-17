@@ -22,20 +22,27 @@ def deliver(state: InvestigationState) -> dict[str, Any]:
 
     state_dict = dict(state)
 
-    if state_dict.get("opensre_evaluate") and state_dict.get("opensre_eval_rubric"):
-        from app.integrations.opensre.llm_eval_judge import run_opensre_llm_judge
+    if state_dict.get("opensre_evaluate"):
+        rubric_value = state_dict.get("opensre_eval_rubric")
+        if isinstance(rubric_value, str) and rubric_value.strip():
+            from app.integrations.opensre.llm_eval_judge import run_opensre_llm_judge
 
-        try:
-            judge_result = run_opensre_llm_judge(
-                state=state_dict,
-                rubric=state_dict["opensre_eval_rubric"],
-            )
-            state["opensre_llm_eval"] = judge_result
-        except Exception as exc:
-            logger.exception("LLM judge failed: %s", exc)
+            try:
+                judge_result = run_opensre_llm_judge(
+                    state=state_dict,
+                    rubric=rubric_value,
+                )
+                state["opensre_llm_eval"] = judge_result
+            except Exception as exc:
+                logger.exception("LLM judge failed: %s", exc)
+                state["opensre_llm_eval"] = {
+                    "skipped": True,
+                    "reason": f"Judge run failed: {exc}",
+                }
+        else:
             state["opensre_llm_eval"] = {
                 "skipped": True,
-                "reason": f"Judge run failed: {exc}",
+                "reason": "opensre_eval_rubric missing or invalid; expected non-empty string",
             }
 
     return generate_report(state)

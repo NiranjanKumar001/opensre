@@ -54,3 +54,9 @@ def cloudwatch_is_available(sources: dict[str, dict]) -> bool:
     the LLM.
     """
     return bool(sources.get("cloudwatch"))
+
+
+def hermes_available_or_backend(sources: dict[str, dict]) -> bool:
+    """Available when Hermes integration is connected or a fixture backend is injected."""
+    hermes = sources.get("hermes", {})
+    return bool(hermes.get("connection_verified") or hermes.get("_backend"))
