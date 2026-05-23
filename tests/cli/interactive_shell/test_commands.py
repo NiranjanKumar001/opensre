@@ -1827,6 +1827,32 @@ class TestCliDelegatedCommands:
 
         assert captured_kwargs == [{"capture_output": True}]
 
+    @pytest.mark.parametrize(
+        "slash_input",
+        ["/guardrails", "/guardrails rules", "/guardrails --help"],
+    )
+    def test_slash_guardrails_opts_into_output_capture(
+        self, monkeypatch: object, slash_input: str
+    ) -> None:
+        """Bare ``/guardrails`` (no subcommand), known subcommands, and flag-style
+        invocations must all call ``run_cli_command`` with
+        ``capture_output=True``. Without this, Click's usage block (printed for
+        the no-subcommand case) and subcommand output bypass ``console.print``
+        and never reach the REPL buffer — see issue #2388.
+        """
+        from app.cli.interactive_shell.command_registry import cli_parity as m
+
+        captured_kwargs: list[dict[str, object]] = []
+
+        def _fake_run_cli_command(_console: Console, _args: list[str], **kwargs: object) -> bool:
+            captured_kwargs.append(kwargs)
+            return True
+
+        monkeypatch.setattr(m, "run_cli_command", _fake_run_cli_command)
+        dispatch_slash(slash_input, ReplSession(), Console())
+
+        assert captured_kwargs == [{"capture_output": True}]
+
     def test_slash_onboard_with_args_forwards_them_to_subprocess(self, monkeypatch: object) -> None:
         """Args passed to ``/onboard`` must be forwarded to the subprocess."""
         from app.cli.interactive_shell.command_registry import cli_parity as m

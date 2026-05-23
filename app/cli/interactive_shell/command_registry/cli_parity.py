@@ -231,7 +231,11 @@ def _cmd_tests(session: ReplSession, console: Console, args: list[str]) -> bool:
 
 
 def _cmd_guardrails(session: ReplSession, console: Console, args: list[str]) -> bool:  # noqa: ARG001
-    return run_cli_command(console, ["guardrails", *args])
+    # ``opensre guardrails`` and its subcommands are all non-interactive printers
+    # (init/test/audit/rules just ``click.echo``). Capture so the output — and
+    # Click's usage block when no subcommand is given — reaches the REPL buffer
+    # instead of bypassing ``console.print`` via the child's inherited stdout FD.
+    return run_cli_command(console, ["guardrails", *args], capture_output=True)
 
 
 def _cmd_update(session: ReplSession, console: Console, args: list[str]) -> bool:  # noqa: ARG001
