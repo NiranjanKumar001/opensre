@@ -40,7 +40,11 @@ from tests.benchmarks._framework.adapters import (
     RunContext,
     RunResult,
 )
-from tests.benchmarks.cloudopsbench.bench_agent import BenchInvestigationAgent
+from tests.benchmarks.cloudopsbench.bench_agent import (
+    BaselineLLMAloneAgent,
+    BenchInvestigationAgent,
+    PureBaselineAgent,
+)
 from tests.benchmarks.cloudopsbench.case_loader import (
     BENCHMARK_DIR,
     CloudOpsCase,
@@ -52,7 +56,9 @@ from tests.benchmarks.cloudopsbench.case_loader import (
     load_cases as _legacy_load_cases,
 )
 from tests.benchmarks.cloudopsbench.held_out_split import compute_held_out_set
-from tests.benchmarks.cloudopsbench.predictor import emit_paper_predictions
+from tests.benchmarks.cloudopsbench.predictor import (
+    emit_paper_predictions,
+)
 from tests.benchmarks.cloudopsbench.replay_backend import CloudOpsBenchReplayBackend
 from tests.benchmarks.cloudopsbench.scoring import score_case as _legacy_score_case
 from tests.benchmarks.cloudopsbench.tags import seen_shape_for
@@ -68,7 +74,7 @@ from tests.benchmarks.cloudopsbench.validity_scoring import (
 # --------------------------------------------------------------------------- #
 
 _PAPER_METRIC_SCHEMA = MetricSchema(
-    outcome_metrics=["a1", "a3", "partial_a1", "partial_a3", "tcr"],
+    outcome_metrics=["a1", "a3", "partial_a1", "partial_a3", "object_a1", "object_a3", "tcr"],
     process_metrics=["exact", "in_order", "any_order", "rel", "cov"],
     efficiency_metrics=["steps", "mtti"],
     robustness_metrics=["iac", "rar", "ztdr"],
@@ -85,6 +91,8 @@ _PAPER_METRIC_SCHEMA = MetricSchema(
         "a3": True,
         "partial_a1": True,
         "partial_a3": True,
+        "object_a1": True,
+        "object_a3": True,
         "tcr": True,
         # Process — trajectory alignment + tool usage (higher better)
         "exact": True,
@@ -128,6 +136,20 @@ class CloudOpsBenchAdapter(BenchmarkAdapter):
     name = "cloudopsbench"
     version = "1.0.0"
 
+    # M7 (IntegrityGuard.pre_flight) — a documented data-contamination review
+    # has been performed: Cloud-OpsBench was published 2026-02 and every model
+    # in the grid has a training cutoff PRIOR to that date, so none could have
+    # seen the corpus. Full declaration + caveats live in the pre-registration
+    # (preregistrations/cloudopsbench_v1.yml::contamination_check). This flag is
+    # what the integrity gate reads to allow a non-dev (promotable) run.
+    data_contamination_checked = True
+
+    # Dataset pinning surfaced into provenance.json (_dataset_section reads these
+    # by attribute). Must match the pre-reg target_corpus so a reviewer can
+    # reproduce against the exact corpus revision.
+    hf_dataset = "tracer-cloud/cloud-ops-bench-dataset"
+    hf_revision = "ce0ded4f196f01e176cf1d69ec15c2db42b2a677"
+
     def __init__(self, benchmark_dir: Path = BENCHMARK_DIR) -> None:
         self._benchmark_dir = benchmark_dir
         # CloudOpsCase cache so we don't re-load case files between
@@ -136,6 +158,13 @@ class CloudOpsBenchAdapter(BenchmarkAdapter):
         # start); read-only during cell execution → safe for the framework
         # runner's ThreadPoolExecutor.
         self._cases_by_id: dict[str, CloudOpsCase] = {}
+
+    @property
+    def benchmark_dir(self) -> Path:
+        """Local corpus path, surfaced into provenance.json (_dataset_section
+        reads ``benchmark_dir`` by attribute). Read-only view of the private
+        field so provenance records where the cases were loaded from."""
+        return self._benchmark_dir
 
     # ----------------------------------------------------------------------- #
     # BenchmarkAdapter interface                                              #
@@ -265,16 +294,15 @@ class CloudOpsBenchAdapter(BenchmarkAdapter):
         }
 
     def build_baseline_tools(self, case: BenchmarkCase) -> dict[str, Any]:
-        """LLM-alone mode is implemented in Phase B (separate workstream).
+        """Tool surface for the LLM-alone control arm.
 
-        Raises NotImplementedError so the runner fails fast and clearly
-        rather than silently scoring a baseline run as opensre.
+        Same replay backend, same per-case integrations, same bench-tool
+        registration the opensre+llm path uses — fairness in tool surface
+        is the entire point of the in-harness baseline. The only difference
+        between the two modes is the agent class (see
+        :meth:`baseline_agent_class`), which carries the policy delta.
         """
-        raise NotImplementedError(
-            "build_baseline_tools is Phase B of the task scope — "
-            "see opensre-benchmark-task-scope.md. Until then, run with "
-            "modes=['opensre+llm'] only."
-        )
+        return self.build_opensre_integrations(case)
 
     def score_case(self, case: BenchmarkCase, run: RunResult, context: RunContext) -> CaseScore:
         """Score the case using CloudOpsBench's 15 paper metrics.
@@ -330,6 +358,29 @@ class CloudOpsBenchAdapter(BenchmarkAdapter):
         """
         return BenchInvestigationAgent
 
+    def baseline_agent_class(self) -> type[BaselineLLMAloneAgent]:
+        """Agent class for the llm_alone control arm.
+
+        Returns :class:`BaselineLLMAloneAgent` — same bench-package tool
+        filter as :class:`BenchInvestigationAgent` (so the comparison is
+        fair on tool surface) but without the MIN_TOOL_CALLS=8 floor (so
+        the comparison isolates the lever).
+        """
+        return BaselineLLMAloneAgent
+
+    def pure_baseline_agent_class(self) -> type[PureBaselineAgent]:
+        """Agent class for the llm_alone_pure control arm.
+
+        Returns :class:`PureBaselineAgent` — same bench-package tool
+        filter as the other two arms, no MIN_TOOL_CALLS floor (like
+        BaselineLLMAloneAgent), AND a minimal task-specific system prompt
+        instead of opensre's full planner/verifier/stage-gate prompt.
+        The contrast (opensre+llm) − (llm_alone_pure) isolates the full
+        opensre stack; (llm_alone) − (llm_alone_pure) isolates opensre's
+        prompt alone, factoring out the termination policy.
+        """
+        return PureBaselineAgent
+
     def format_final_answer(
         self,
         case: BenchmarkCase,
@@ -379,9 +430,66 @@ class CloudOpsBenchAdapter(BenchmarkAdapter):
         if payload is None:
             return run
 
+        # Lever D — rerank deliberately NOT wired into the pipeline.
+        # The conservative-rescue variant (see ``rerank_predictions_by_evidence``)
+        # was empirically validated against the 11:46 case data and found to
+        # have zero rescue surface: 76/77 failures have rank-1 with at least
+        # one substring hit in the LLM's own investigation narrative, so the
+        # "rank-1 unmentioned" gate never fires. Additionally, the per-case
+        # ``evidence_entries`` field is empty (separate plumbing bug — needs
+        # the runner to propagate tool results before any text-based rerank
+        # has a richer signal to use). Keep the function + tests in tree as
+        # a documented attempt; revisit when tool results are persisted or
+        # when an LLM-as-judge variant is worth its per-cell cost.
         enriched_diagnosis = dict(run.final_diagnosis)
         enriched_diagnosis["top_3_predictions"] = payload["top_3_predictions"]
         return replace(run, final_diagnosis=enriched_diagnosis)
+
+    def select_best_run(
+        self,
+        case: BenchmarkCase,  # noqa: ARG002 — interface contract
+        runs: list[tuple[RunResult, CaseScore]],
+    ) -> int | None:
+        """Majority vote on the predicted root-cause taxonomy.
+
+        06-05 run analysis showed median a1=0.43 (gpt-4o) and 0.57 (gpt-5)
+        but ORACLE best-of-3=0.83 / 0.80 — a 0.40 / 0.23 consistency gap.
+        Majority vote on ``final_diagnosis.top_3_predictions[0].fault_taxonomy``
+        closes 60% of the gpt-4o gap and 100% of the gpt-5 gap (gpt-5 hits
+        the paper baseline 0.67 exactly). 90% of scenarios had ≥2 of 3
+        seeds agreeing on a taxonomy.
+
+        Algorithm:
+          1. Extract each run's top-1 predicted taxonomy
+            (``final_diagnosis["top_3_predictions"][0]["fault_taxonomy"]``).
+          2. Drop runs with no prediction (predictor failed → empty string).
+          3. Pick the taxonomy with the most votes. Ties broken by earliest
+             run index — deterministic + reproducible.
+          4. Return the index of the earliest run that produced that
+             taxonomy.
+
+        Returns ``None`` only when no run produced any prediction at all —
+        in that case the median ``all`` stratum is the only meaningful view.
+        """
+        if len(runs) <= 1:
+            return 0 if runs else None
+
+        taxonomies: list[str] = []
+        for run, _score in runs:
+            top = (run.final_diagnosis or {}).get("top_3_predictions") or []
+            taxonomies.append(top[0].get("fault_taxonomy", "") if top else "")
+
+        # Tally votes, ignoring blank predictions
+        votes: dict[str, int] = {}
+        for t in taxonomies:
+            if t:
+                votes[t] = votes.get(t, 0) + 1
+        if not votes:
+            return None
+
+        # Highest vote count, tiebreak by first-appearance order (stable)
+        winning = max(votes, key=lambda k: (votes[k], -taxonomies.index(k)))
+        return taxonomies.index(winning)
 
     # ----------------------------------------------------------------------- #
     # Internal                                                                #
@@ -437,6 +545,11 @@ def _build_case_data(
             "path2": list(legacy.process.get("path2") or []),
         },
         "steps": _steps_from_backend(backend),
+        # Real measured wall-clock of the investigation (runner's monotonic
+        # timer around run_investigation). The scorer's calculate_total_latency
+        # reads this for MTTI — without it, MTTI is structurally 0 because the
+        # replay backend has no per-step latency to sum.
+        "latency_ms": run.latency_ms,
         # The legacy scorer doesn't require final_state, but pass it through
         # for forward-compat with future scoring extensions.
         "final_state": {"evidence_entries": run.evidence_entries},

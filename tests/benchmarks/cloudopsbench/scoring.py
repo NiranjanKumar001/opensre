@@ -41,6 +41,13 @@ class CloudOpsMetrics:
     a3: float
     partial_a1: float
     partial_a3: float
+    # Localization-only accuracy: fault_object correct regardless of whether
+    # the root_cause/taxonomy strings also matched. Isolates "did we find the
+    # right thing" from "did we name the failure with the exact dataset token",
+    # which the strict triple-match a1/partial_a1 conflate. object_a1 = rank-1
+    # object correct; object_a3 = correct object anywhere in the top-3.
+    object_a1: float
+    object_a3: float
     tcr: float
     exact: float
     in_order: float
@@ -356,6 +363,9 @@ def score_predictions(
     a3 = 0.0
     partial_a1 = 0.0
     partial_a3 = 0.0
+    object_a1 = 0.0
+    object_a3 = 0.0
+    gt_obj = normalize_text(ground_truth.get("fault_object"))
     for idx, prediction in enumerate(predictions[:3]):
         full_match, partial_match = compare_prediction(prediction, ground_truth)
         if full_match:
@@ -366,11 +376,17 @@ def score_predictions(
             if idx == 0:
                 partial_a1 = 1.0
             partial_a3 = 1.0
+        if normalize_text(prediction.get("fault_object")) == gt_obj:
+            if idx == 0:
+                object_a1 = 1.0
+            object_a3 = 1.0
     return {
         "a1": a1,
         "a3": a3,
         "partial_a1": partial_a1,
         "partial_a3": partial_a3,
+        "object_a1": object_a1,
+        "object_a3": object_a3,
     }
 
 
@@ -529,6 +545,29 @@ def calculate_rar(agent_steps: list[str]) -> float:
 
 
 def calculate_total_latency(case_data: dict[str, Any]) -> float:
+    """Mean-time-to-identify, in seconds: wall-clock from investigation start
+    to the agent's diagnosis.
+
+    The benchmark replays tool results deterministically, so per-step
+    ``tool_latency`` is meaningless (~microseconds of dict lookup). The honest
+    signal is the LLM-dominated wall-clock the runner already measures with a
+    monotonic timer around ``run_investigation`` and stores on
+    ``RunResult.latency_ms`` (the scoring-only predictor call runs *after* that
+    stop-watch, so it isn't counted — exactly the paper's "time to identify").
+
+    Priority:
+      1. Real measured wall-clock — ``case_data["latency_ms"]`` (preferred).
+      2. Sum of per-step ``model_latency``/``tool_latency`` — kept for any
+         future per-step instrumentation and for callers that pass timed steps.
+
+    Returns 0.0 only when neither source is present (e.g. a hand-built
+    ``case_data`` in a unit test), so a missing measurement is visibly 0
+    rather than a silently fabricated number.
+    """
+    latency_ms = case_data.get("latency_ms")
+    if isinstance(latency_ms, (int, float)) and latency_ms > 0:
+        return float(latency_ms) / 1000.0
+
     total = 0.0
     for step in case_data.get("steps", []):
         if not isinstance(step, dict):
@@ -554,7 +593,14 @@ def score_case(case: CloudOpsCase, case_data: dict[str, Any]) -> CloudOpsCaseSco
     outcome_scores = (
         score_predictions(predictions, ground_truth)
         if predictions
-        else {"a1": 0.0, "a3": 0.0, "partial_a1": 0.0, "partial_a3": 0.0}
+        else {
+            "a1": 0.0,
+            "a3": 0.0,
+            "partial_a1": 0.0,
+            "partial_a3": 0.0,
+            "object_a1": 0.0,
+            "object_a3": 0.0,
+        }
     )
 
     agent_steps, invalid_count, invalid_reasons = standardize_agent_steps(case_data)
@@ -566,6 +612,8 @@ def score_case(case: CloudOpsCase, case_data: dict[str, Any]) -> CloudOpsCaseSco
         a3=outcome_scores["a3"],
         partial_a1=outcome_scores["partial_a1"],
         partial_a3=outcome_scores["partial_a3"],
+        object_a1=outcome_scores["object_a1"],
+        object_a3=outcome_scores["object_a3"],
         tcr=1.0 if predictions else 0.0,
         exact=best_path["exact"],
         in_order=best_path["in_order"],
@@ -599,6 +647,8 @@ def summarize_scores(scores: list[CloudOpsCaseScore]) -> dict[str, Any]:
         "a3",
         "partial_a1",
         "partial_a3",
+        "object_a1",
+        "object_a3",
         "tcr",
         "exact",
         "in_order",
@@ -632,6 +682,8 @@ def summarize_scores(scores: list[CloudOpsCaseScore]) -> dict[str, Any]:
             "Accuracy @3": averages["a3"],
             "Partial Accuracy @1": averages["partial_a1"],
             "Partial Accuracy @3": averages["partial_a3"],
+            "Object Accuracy @1": averages["object_a1"],
+            "Object Accuracy @3": averages["object_a3"],
             "Task Completion Rate": averages["tcr"],
             "ExactMatch": averages["exact"],
             "InOrder": averages["in_order"],

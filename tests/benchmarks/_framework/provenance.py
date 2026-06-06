@@ -55,6 +55,7 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
     {
         "OPENSRE_BENCH_WORKERS",
         "OPENSRE_BENCH_COST_BUDGET_USD",
+        "BENCH_MIN_TOOL_CALLS",
         "PYTHONPATH",
         "LANG",
         "LC_ALL",
@@ -148,7 +149,14 @@ def _git_state() -> dict[str, Any]:
         sha_full = _run_git("rev-parse", "HEAD") or "(unknown)"
         sha_short = _run_git("rev-parse", "--short", "HEAD") or "(unknown)"
         branch = _run_git("rev-parse", "--abbrev-ref", "HEAD") or "(unknown)"
-        status_porcelain = _run_git("status", "--porcelain") or ""
+        # NB: fetch porcelain UNSTRIPPED. ``git status --porcelain`` emits
+        # ``XY PATH`` where column 0 (X = index state) is a SIGNIFICANT space for
+        # unstaged-only changes (e.g. " M app/agent/investigation.py"). The
+        # default strip in ``_run_git`` would eat that leading space on the first
+        # line, shifting it left so ``line[3:]`` slices into the path and drops
+        # its first character (" M app…" → "pp/agent/…"). Keep the raw spacing so
+        # the fixed-width [3:] slice lands exactly on the path.
+        status_porcelain = _run_git("status", "--porcelain", strip=False) or ""
         changed_files = [
             line[3:].strip()
             for line in status_porcelain.splitlines()
@@ -171,8 +179,13 @@ def _git_state() -> dict[str, Any]:
         }
 
 
-def _run_git(*args: str) -> str | None:
-    """Run a git command; return stripped stdout or None on failure."""
+def _run_git(*args: str, strip: bool = True) -> str | None:
+    """Run a git command; return stdout (stripped by default) or None on failure.
+
+    Pass ``strip=False`` for commands whose leading/trailing whitespace is
+    significant — notably ``status --porcelain``, where column 0 is a meaningful
+    space for unstaged changes.
+    """
     result = subprocess.run(
         ["git", *args],
         capture_output=True,
@@ -182,7 +195,7 @@ def _run_git(*args: str) -> str | None:
     )
     if result.returncode != 0:
         return None
-    return result.stdout.strip()
+    return result.stdout.strip() if strip else result.stdout
 
 
 # --------------------------------------------------------------------------- #
@@ -336,7 +349,24 @@ def _run_inputs_section(config: BenchmarkConfig) -> dict[str, Any]:
         "seed": config.seed,
         "filters": config.filters.model_dump(),
         "report_formats": list(config.report_formats),
+        "min_tool_calls": _resolved_min_tool_calls(),
     }
+
+
+def _resolved_min_tool_calls() -> int | None:
+    """The effective MIN_TOOL_CALLS floor for the opensre+llm arm this run.
+
+    Recorded so a sweep over ``BENCH_MIN_TOOL_CALLS`` is self-documenting:
+    the report no longer has to be cross-referenced with the shell that
+    launched it. Best-effort — if the bench agent can't be imported (e.g.
+    opensre deps absent in a unit-test sandbox), return None rather than fail.
+    """
+    try:
+        from tests.benchmarks.cloudopsbench.bench_agent import _resolve_min_tool_calls
+
+        return _resolve_min_tool_calls()
+    except Exception:
+        return None
 
 
 # --------------------------------------------------------------------------- #

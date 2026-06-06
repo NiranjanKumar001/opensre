@@ -17,12 +17,16 @@ Two entry points:
     promoted to a real report.
 
 opensre+LLM mode wires opensre's ``run_investigation`` against the adapter's
-integrations. ``llm_alone`` mode is Phase B; ``run()`` raises if requested.
+integrations + investigation agent. ``llm_alone`` mode (the control arm) wires
+the same per-case tool surface but the adapter's baseline agent class, so the
+contrast isolates opensre's policy delta on a fixed model. The runner refuses
+``modes=["llm_alone"]`` only when the adapter returns ``None`` from
+``baseline_agent_class`` (see ``_run_inner``).
 
-llm_dispatch is not yet implemented — the runner uses whatever LLM opensre
-is configured with via env vars. ``RunResult.model_version`` is set to
-``"(unpinned)"`` accordingly; a future llm_dispatch.py will enable per-cell
-model selection with version pinning.
+llm_dispatch pins the model per cell: the dispatcher activates each LLM, sets
+the provider env, resets opensre's client singletons, and verifies the
+resolved snapshot against ``config.model_versions``. ``RunResult.model_version``
+records what opensre actually resolved to, not what the YAML requested.
 """
 
 from __future__ import annotations
@@ -101,11 +105,12 @@ class RunOutcome:
 class BenchmarkRunner:
     """Drives a single benchmark run end-to-end.
 
-    v1 limitations (will lift as later modules ship):
-      - Serial execution (parallel comes when worker-pool tested)
-      - opensre+llm mode only (llm_alone is Phase B)
-      - No per-cell LLM dispatch (uses opensre's configured LLM)
-      - Stratum reporting is `all` only until Phase D tagging adds seen/unseen
+    Supports: serial or worker-pool execution; both ``opensre+llm`` and the
+    ``llm_alone`` control arm (when the adapter provides a baseline agent);
+    per-cell LLM dispatch with version pinning; and per-stratum reporting
+    (all / seen-shape / unseen-shape / held-out / optimize / consistency-
+    selected). Headline aggregation (mean + scenario-clustered CI) lives in
+    ``reporting.py``; this runner stores per-stratum medians.
     """
 
     def __init__(
@@ -155,11 +160,24 @@ class BenchmarkRunner:
     # ----------------------------------------------------------------------- #
 
     def _run_inner(self, *, dev_mode: bool) -> RunOutcome:
-        # Refuse unsupported modes upfront
-        if "llm_alone" in self.config.modes:
+        # Refuse baseline modes if the adapter declines — keeps the runner
+        # generic over adapters that don't yet ship a matched control arm.
+        # Both checks are pre-flight so an unsupported mode fails before any
+        # cell runs and burns tokens.
+        if "llm_alone" in self.config.modes and self.adapter.baseline_agent_class() is None:
             raise NotImplementedError(
-                "llm_alone mode is Phase B of the task scope — see "
-                "opensre-benchmark-task-scope.md. Run with modes=['opensre+llm'] only."
+                f"Adapter {self.adapter.name!r} does not implement an llm_alone "
+                "control arm (baseline_agent_class returned None). Run with "
+                "modes=['opensre+llm'] only, or extend the adapter."
+            )
+        if (
+            "llm_alone_pure" in self.config.modes
+            and self.adapter.pure_baseline_agent_class() is None
+        ):
+            raise NotImplementedError(
+                f"Adapter {self.adapter.name!r} does not implement a pure baseline "
+                "(pure_baseline_agent_class returned None). Drop llm_alone_pure "
+                "from modes, or extend the adapter with a prompt-stripped agent."
             )
 
         # Pre-flight: verify every LLM in config is registered AND that its
@@ -249,7 +267,9 @@ class BenchmarkRunner:
         ended_at = datetime.now(UTC).isoformat()
 
         # Build the report (per-stratum aggregation)
-        per_stratum = _aggregate_per_stratum(cells, self.adapter.metric_schema().all_metrics())
+        per_stratum = _aggregate_per_stratum(
+            cells, self.adapter.metric_schema().all_metrics(), adapter=self.adapter
+        )
         negative = _build_negative_results(cells, self.adapter)
         config_hash = _hash_config(self.config)
 
@@ -370,7 +390,23 @@ class BenchmarkRunner:
         from app.pipeline.runners import run_investigation
 
         alert = self.adapter.build_alert(case)
-        integrations = self.adapter.build_opensre_integrations(case)
+        # Mode dispatch: opensre+llm uses the adapter's full integration setup
+        # + investigation agent; llm_alone uses the (typically identical) baseline
+        # tool surface + a different agent class. Both go through the same
+        # run_investigation entry point so the rest of the pipeline (format,
+        # score, artifact write) is mode-agnostic.
+        if mode == "llm_alone":
+            integrations = self.adapter.build_baseline_tools(case)
+            agent_class = self.adapter.baseline_agent_class()
+        elif mode == "llm_alone_pure":
+            # Same tool surface as the other baseline (build_baseline_tools);
+            # only the agent class differs — minimal system prompt instead of
+            # opensre's full planner/verifier prompt.
+            integrations = self.adapter.build_baseline_tools(case)
+            agent_class = self.adapter.pure_baseline_agent_class()
+        else:
+            integrations = self.adapter.build_opensre_integrations(case)
+            agent_class = self.adapter.investigation_agent_class()
         started = datetime.now(UTC)
         t0 = time.monotonic()
         ok = True
@@ -381,7 +417,7 @@ class BenchmarkRunner:
             final_state = run_investigation(
                 alert.raw,
                 resolved_integrations=integrations,
-                agent_class=self.adapter.investigation_agent_class(),
+                agent_class=agent_class,
             )
             final_state_dict = dict(final_state)
         except (CostBudgetExceeded, UnknownModel, LLMCreditExhaustedError):
@@ -494,22 +530,39 @@ class BenchmarkRunner:
 
 
 def _aggregate_per_stratum(
-    cells: list[_CellResult], metrics: list[str]
+    cells: list[_CellResult],
+    metrics: list[str],
+    *,
+    adapter: BenchmarkAdapter | None = None,
 ) -> dict[str, dict[str, dict[str, float]]]:
     """Aggregate cell metrics into the per_stratum shape IntegrityGuard expects.
 
     Shape: {stratum: {f"{mode}/{llm}": {metric: median_value}}}
 
     Strata populated:
-      - ``all``                          — every cell
+      - ``all``                          — every cell, median across runs
       - ``seen-shape`` / ``unseen-shape`` — Phase D tag from
         ``BenchmarkCase.seen_shape``; mid-shape cells appear only in ``all``
       - ``held-out`` / ``optimize``      — generalization-gate split from
         ``BenchmarkCase.metadata["is_held_out"]``; required by integrity
         Mechanism 8 so reports can compute ``held_out_lift / optimize_lift``
         per the pre-registration's ``generalization_gate`` clause
+      - ``consistency-selected``         — one run per (case, mode, llm)
+        group, picked by ``adapter.select_best_run``. Emitted only when
+        the adapter overrides the hook AND at least one group returns a
+        non-None index. Lets reports show median + selected side-by-side
+        without mutating the standard ``all`` view.
+
+    ``adapter`` is optional so existing callers (tests, downstream
+    framework integrators) keep working with median-only aggregation;
+    passing the adapter enables the selected stratum.
     """
     by_stratum_mode_llm: dict[str, dict[str, dict[str, list[float]]]] = {"all": {}}
+
+    # Group cells by (case_id, mode, llm) so the adapter's selector can
+    # see all seeds of one scenario together. dict preserves insertion order
+    # so the index it returns is stable w.r.t. the runs list.
+    by_scenario: dict[tuple[str, str, str], list[_CellResult]] = {}
 
     for cell in cells:
         key = f"{cell.mode}/{cell.llm}"
@@ -532,6 +585,32 @@ def _aggregate_per_stratum(
             append_to("held-out")
         elif held_out is False:
             append_to("optimize")
+
+        by_scenario.setdefault((cell.case.case_id, cell.mode, cell.llm), []).append(cell)
+
+    # Consistency selection: ask the adapter to pick the canonical run per
+    # scenario. A None return for any group means "no pick" — that group's
+    # cells are skipped in the selected stratum, the others still count.
+    if adapter is not None:
+        for group in by_scenario.values():
+            if not group:
+                continue
+            try:
+                picked = adapter.select_best_run(group[0].case, [(c.run, c.score) for c in group])
+            except Exception as exc:
+                # Selector errors must not abort the report — fall back to
+                # median-only. Log so the failure surfaces in the run log.
+                print(f"  ⚠ select_best_run raised for {group[0].case.case_id}: {exc}")
+                continue
+            if picked is None or not (0 <= picked < len(group)):
+                continue
+            chosen = group[picked]
+            key = f"{chosen.mode}/{chosen.llm}"
+            bucket = by_stratum_mode_llm.setdefault("consistency-selected", {}).setdefault(
+                key, {m: [] for m in metrics}
+            )
+            for m in metrics:
+                bucket[m].append(chosen.score.metrics.get(m, 0.0))
 
     return {
         stratum: {

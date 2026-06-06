@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 # same case work for both modes.                                              #
 # --------------------------------------------------------------------------- #
 
-Mode = Literal["opensre+llm", "llm_alone"]
+Mode = Literal["opensre+llm", "llm_alone", "llm_alone_pure"]
 
 
 # --------------------------------------------------------------------------- #
@@ -286,6 +286,41 @@ class BenchmarkAdapter(ABC):
         """
         return None
 
+    def baseline_agent_class(self) -> type[ConnectedInvestigationAgent] | None:
+        """Optional: which agent class to use for the ``llm_alone`` control arm.
+
+        Default ``None`` — the adapter does not support an in-harness baseline,
+        and the runner will refuse a config with ``modes=["llm_alone"]``.
+
+        Override to return an agent class that represents the matched control
+        for this benchmark's headline claim. The control's job is to isolate
+        whichever lever you're attributing lift to — typically: same tool
+        surface, same scoring, but no bench-specific termination policy.
+
+        The runner picks this method for ``llm_alone`` cells and
+        ``investigation_agent_class`` for ``opensre+llm`` cells, then passes
+        the chosen class to ``run_investigation`` exactly the same way.
+        """
+        return None
+
+    def pure_baseline_agent_class(self) -> type[ConnectedInvestigationAgent] | None:
+        """Optional: agent class for the pure-baseline (``llm_alone_pure``) arm.
+
+        Default ``None`` — the adapter does not ship a prompt-stripped
+        baseline; runner refuses ``modes=["llm_alone_pure"]``.
+
+        Override to return an agent that ALSO overrides ``_build_system_prompt``
+        with a minimal task-specific prompt — no opensre planner / verifier /
+        evidence-budget instructions. The contrast (opensre+llm) − (llm_alone_pure)
+        then isolates the lift from opensre's full structural stack, not just
+        the bench-specific termination policy that ``baseline_agent_class``
+        controls.
+
+        Same tool surface as both other arms; the methodological constant
+        across all three modes is the per-case integrations dict.
+        """
+        return None
+
     def format_final_answer(
         self,
         case: BenchmarkCase,  # noqa: ARG002 — used by overrides
@@ -309,3 +344,37 @@ class BenchmarkAdapter(ABC):
         (with investigation evidence) and future ``llm_alone`` (without).
         """
         return run
+
+    def select_best_run(
+        self,
+        case: BenchmarkCase,  # noqa: ARG002 — used by overrides
+        runs: list[tuple[RunResult, CaseScore]],  # noqa: ARG002 — used by overrides
+    ) -> int | None:
+        """Optional: pick the canonical run from a self-consistency batch.
+
+        Called once per (case, mode, llm) group after every run finishes.
+        ``runs`` is the list of (RunResult, CaseScore) tuples in original
+        run-index order.
+
+        Return:
+          - ``int`` — index of the run whose metrics should be reported as
+            the canonical answer for this scenario. The runner emits an
+            additional ``consistency_selected`` stratum built from those
+            picks alongside the standard ``all`` (median) stratum.
+          - ``None`` — no selection; only the median ``all`` stratum is
+            reported. This is the default for adapters that don't run
+            multi-seed self-consistency.
+
+        Why this hook exists: paper-style A@1 averaging across N seeds
+        drags the median below what the agent can actually produce. The
+        06-05 CloudOpsBench run showed median a1=0.43 (gpt-4o) vs
+        ORACLE bo3=0.83 — a 0.40 consistency gap. A free selector
+        (majority vote on predicted root-cause taxonomy) closes 60% of
+        that gap with zero extra LLM calls.
+
+        The hook is opt-in per adapter so benchmarks without multi-seed
+        protocols are unaffected. The runner still computes the standard
+        median stratum so both views are reported side-by-side for
+        transparency — no silent metric swap.
+        """
+        return None
