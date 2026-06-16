@@ -18,6 +18,7 @@ from app.integrations.models import (
     IncidentIoIntegrationConfig,
 )
 from app.integrations.sentry import build_sentry_config, validate_sentry_config
+from app.integrations.tempo import build_tempo_config, validate_tempo_config
 from app.services.alertmanager import make_alertmanager_client
 from app.services.coralogix import CoralogixClient
 from app.services.datadog import DatadogClient, DatadogConfig
@@ -535,6 +536,31 @@ def validate_splunk_integration(
         ok=False,
         detail=f"Splunk validation failed: {result.get('error', 'unknown error')}",
     )
+
+
+def validate_tempo_integration(
+    *,
+    url: str,
+    api_key: str = "",
+    username: str = "",
+    password: str = "",
+    org_id: str = "",
+) -> IntegrationHealthResult:
+    """Validate Tempo connectivity via the tag-search endpoint."""
+    try:
+        config = build_tempo_config(
+            {
+                "url": url,
+                "api_key": api_key,
+                "username": username,
+                "password": password,
+                "org_id": org_id,
+            }
+        )
+    except Exception as err:
+        return IntegrationHealthResult(ok=False, detail=f"Tempo config invalid: {err}")
+    result = validate_tempo_config(config)
+    return IntegrationHealthResult(ok=result.ok, detail=result.detail)
 
 
 def validate_opensearch_integration(

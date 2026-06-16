@@ -973,6 +973,7 @@ _TOOLS_WITHOUT_DELIBERATE_CATCH: frozenset[str] = frozenset(
         "query_signoz_metrics",
         "query_signoz_traces",
         "query_splunk_logs",
+        "query_tempo",
         "run_diagnostic_code",
         "scan_redis_keys",
         "search_bitbucket_code",

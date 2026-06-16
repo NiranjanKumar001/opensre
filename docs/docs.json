@@ -130,6 +130,7 @@
               "pagerduty",
               "sentry",
               "signoz",
+              "tempo",
               "splunk",
               "victoria_logs"
             ]

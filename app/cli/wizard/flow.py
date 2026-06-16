@@ -225,6 +225,12 @@ def validate_splunk_integration(**kwargs):
     return _validate(**kwargs)
 
 
+def validate_tempo_integration(**kwargs):
+    from app.cli.wizard.integration_health import validate_tempo_integration as _validate
+
+    return _validate(**kwargs)
+
+
 def get_sentry_auth_recommendations():
     from app.integrations.sentry import get_sentry_auth_recommendations as _get
 
@@ -1793,6 +1799,75 @@ def _configure_telegram() -> tuple[str, str]:
         _console.print(f"[{SECONDARY}]Try again or press Ctrl+C to cancel.[/]")
 
 
+def _configure_tempo() -> tuple[str, str]:
+    _, credentials = _integration_defaults("tempo")
+    _console.print(
+        f"[{SECONDARY}]Tempo commonly runs without auth behind a gateway — a URL alone is enough.[/]"
+    )
+    _console.print(
+        f"[{SECONDARY}]For auth, provide either a bearer token OR a username/password (not both).[/]"
+    )
+    while True:
+        url = _prompt_value(
+            "Tempo URL (e.g. http://localhost:3200)",
+            default=_string_value(credentials.get("url")),
+        )
+        api_key = _prompt_value(
+            "Tempo bearer token (optional, leave blank if using basic auth or none)",
+            default=_string_value(credentials.get("api_key")),
+            secret=True,
+            allow_empty=True,
+        )
+        username = _prompt_value(
+            "Tempo username (optional, for basic auth)",
+            default=_string_value(credentials.get("username")),
+            allow_empty=True,
+        )
+        password = _prompt_value(
+            "Tempo password (optional, for basic auth)",
+            default=_string_value(credentials.get("password")),
+            secret=True,
+            allow_empty=True,
+        )
+        org_id = _prompt_value(
+            "Tempo tenant / X-Scope-OrgID (optional, leave blank if single-tenant)",
+            default=_string_value(credentials.get("org_id")),
+            allow_empty=True,
+        )
+        with _console.status("Validating Tempo integration...", spinner="dots"):
+            result = validate_tempo_integration(
+                url=url,
+                api_key=api_key,
+                username=username,
+                password=password,
+                org_id=org_id,
+            )
+        _render_integration_result("Tempo", result)
+        if result.ok:
+            creds: dict[str, str] = {"url": url}
+            if api_key:
+                creds["api_key"] = api_key
+            if username:
+                creds["username"] = username
+            if password:
+                creds["password"] = password
+            if org_id:
+                creds["org_id"] = org_id
+            upsert_integration("tempo", {"credentials": creds})
+            env_values: dict[str, str] = {"TEMPO_URL": url}
+            if api_key:
+                env_values["TEMPO_API_KEY"] = api_key
+            if username:
+                env_values["TEMPO_USERNAME"] = username
+            if password:
+                env_values["TEMPO_PASSWORD"] = password
+            if org_id:
+                env_values["TEMPO_ORG_ID"] = org_id
+            env_path = sync_env_values(env_values)
+            return "Tempo", str(env_path)
+        _console.print(f"[{SECONDARY}]Try again or press Ctrl+C to cancel.[/]")
+
+
 def _configure_splunk() -> tuple[str, str]:
     _, credentials = _integration_defaults("splunk")
     while True:
@@ -2059,6 +2134,11 @@ def _configure_selected_integrations() -> tuple[list[str], str | None]:
             hint="Query logs and indices from OpenSearch or Elasticsearch clusters",
         ),
         Choice(
+            value="tempo",
+            label="Grafana Tempo",
+            hint="Query distributed traces from a standalone Tempo backend",
+        ),
+        Choice(
             value="skip",
             label="Skip for now",
             hint="Finish onboarding without configuring an integration",
@@ -2099,6 +2179,7 @@ def _configure_selected_integrations() -> tuple[list[str], str | None]:
         "openclaw": _configure_openclaw,
         "opensearch": _configure_opensearch,
         "splunk": _configure_splunk,
+        "tempo": _configure_tempo,
     }
     _SERVICE_LABELS = {
         "grafana_local": "grafana local",
@@ -2125,6 +2206,7 @@ def _configure_selected_integrations() -> tuple[list[str], str | None]:
         "notion": "notion",
         "openclaw": "openclaw",
         "opensearch": "opensearch",
+        "tempo": "grafana tempo",
     }
 
     _step(f"Service · {_SERVICE_LABELS.get(selected_service, selected_service)}")

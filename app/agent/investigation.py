@@ -133,6 +133,7 @@ _ALERT_SOURCE_TO_TOOL_SOURCES: dict[str, list[str]] = {
     "splunk": ["splunk"],
     "signoz": ["signoz"],
     "jenkins": ["jenkins"],
+    "tempo": ["tempo"],
 }
 
 # Callback type: called with (event_kind, data_dict) during the agent loop.

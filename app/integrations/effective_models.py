@@ -103,3 +103,4 @@ class EffectiveIntegrations(StrictConfigModel):
     alicloud: EffectiveIntegrationEntry | None = None
     signoz: EffectiveIntegrationEntry | None = None
     jenkins: EffectiveIntegrationEntry | None = None
+    tempo: EffectiveIntegrationEntry | None = None

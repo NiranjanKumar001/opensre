@@ -20,6 +20,7 @@ from app.cli.wizard.integration_validators.client_validators import (
     validate_pagerduty_integration,
     validate_sentry_integration,
     validate_splunk_integration,
+    validate_tempo_integration,
     validate_vercel_integration,
 )
 from app.cli.wizard.integration_validators.http_probe_validators import (
@@ -61,5 +62,6 @@ __all__ = [
     "validate_slack_webhook",
     "validate_telegram_bot",
     "validate_splunk_integration",
+    "validate_tempo_integration",
     "validate_vercel_integration",
 ]

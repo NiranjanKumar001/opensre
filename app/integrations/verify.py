@@ -47,6 +47,7 @@ _verify_rabbitmq = _adapters._verify_rabbitmq
 _verify_redis = _adapters._verify_redis
 _verify_sentry = _adapters._verify_sentry
 _verify_signoz = _adapters._verify_signoz
+_verify_tempo = _adapters._verify_tempo
 _verify_slack = _adapters._verify_slack
 _verify_snowflake = _adapters._verify_snowflake
 _verify_splunk = _adapters._verify_splunk
@@ -196,6 +197,7 @@ __all__ = [
     "_verify_redis",
     "_verify_sentry",
     "_verify_signoz",
+    "_verify_tempo",
     "_verify_slack",
     "_verify_snowflake",
     "_verify_splunk",
