@@ -20,7 +20,7 @@ From a terminal with stdin and stdout attached (`opensre` detects a TTY), run:
 opensre
 ```
 
-Then describe the incident or paste alert context at the prompt. Use `/help` for slash commands and `/exit` when finished. See [Interactive Shell Commands](/interactive-shell-commands) for a quick reference (`/cost`, `/status`, `/effort`, and more).
+Then describe the incident or paste alert context at the prompt. Use `/help` for slash commands and `/exit` when finished. See [Interactive Shell Commands](/interactive-shell-commands) for the full slash-command reference (`/cost`, `/status`, `/investigate`, and every other REPL command).
 
 When `LLM_PROVIDER` is `openai` or `codex`, `/effort` sets how much reasoning the model applies for that REPL session (`low`, `medium`, `high`, `xhigh`, or `max`). Run `/effort` with no arguments to print the current level and usage; `/status` includes the same field. Other providers ignore this setting (the shell prints a hint). You can also set `OPENSRE_REASONING_EFFORT` to `low`, `medium`, `high`, or `xhigh` in the environment for non-interactive defaults.
 
