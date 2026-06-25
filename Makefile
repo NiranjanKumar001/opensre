@@ -31,7 +31,7 @@ export PATH := $(if $(wildcard .venv/bin),$(CURDIR)/.venv/bin:,$(if $(wildcard .
 # Create venv and install dependencies (requires https://docs.astral.sh/uv/)
 install:
 	uv sync --frozen --extra dev
-	uv run python -m app.analytics.install
+	uv run python -m platform.analytics.install
 
 build:
 	$(PYTHON) -m build
@@ -95,13 +95,13 @@ check-docker:
 	@docker info >/dev/null 2>&1 || { echo "Docker is installed, but the Docker daemon is not running. Start Docker Desktop, OrbStack, or Colima, then rerun this target."; exit 1; }
 
 grafana-local-up: check-docker
-	docker compose -f app/cli/wizard/local_grafana_stack/docker-compose.yml up -d
+	docker compose -f cli/wizard/local_grafana_stack/docker-compose.yml up -d
 
 grafana-local-down: check-docker
-	docker compose -f app/cli/wizard/local_grafana_stack/docker-compose.yml down
+	docker compose -f cli/wizard/local_grafana_stack/docker-compose.yml down
 
 grafana-local-seed:
-	$(PYTHON) -m app.cli.wizard.grafana_seed
+	$(PYTHON) -m cli.wizard.grafana_seed
 
 # Run CloudWatch demo
 cloudwatch-demo:
@@ -274,7 +274,7 @@ run:
 	opensre investigate
 
 dev:
-	@echo "Run the health app with: uv run uvicorn app.webapp:app --reload --host 0.0.0.0 --port 8000"
+	@echo "Run the health app with: uv run uvicorn config.webapp:app --reload --host 0.0.0.0 --port 8000"
 
 docs-dev:
 	cd docs && mint dev
@@ -419,7 +419,7 @@ test-rabbitmq-real:
 	RABBITMQ_USERNAME=sre_admin \
 	RABBITMQ_PASSWORD=sre_password \
 	RABBITMQ_VHOST=/orders \
-	$(PYTHON) -c "from app.integrations.rabbitmq import rabbitmq_config_from_env, validate_rabbitmq_config, get_queue_backlog, get_broker_overview; \
+	$(PYTHON) -c "from integrations.rabbitmq import rabbitmq_config_from_env, validate_rabbitmq_config, get_queue_backlog, get_broker_overview; \
 cfg = rabbitmq_config_from_env(); \
 print('validate:', validate_rabbitmq_config(cfg)); \
 print('overview:', get_broker_overview(cfg)); \

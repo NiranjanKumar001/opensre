@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+from platform.common.coercion import safe_int
 from typing import Any
 
 import pytest
-
-from app.utils.coercion import safe_int
 
 
 @pytest.mark.parametrize(

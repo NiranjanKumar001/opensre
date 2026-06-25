@@ -1,18 +1,17 @@
-"""Tests for app.utils.errors helpers."""
+"""Tests for platform.observability.errors helpers."""
 
 from __future__ import annotations
 
 import logging
-from unittest.mock import MagicMock, patch
-
-import pytest
-
-from app.utils.errors import (
+from platform.observability.errors import (
     OpenSRESilentFallback,
     report_and_reraise,
     report_and_swallow,
     report_exception,
 )
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +31,7 @@ class TestReportException:
     def test_logs_and_captures(self) -> None:
         mock_log = _mock_logger()
         exc = ValueError("test error")
-        with patch("app.utils.errors.capture_exception") as mock_cap:
+        with patch("platform.observability.errors.capture_exception") as mock_cap:
             report_exception(exc, logger=mock_log, message="Something failed")
         mock_log.error.assert_called_once()
         mock_cap.assert_called_once_with(exc, extra=None)
@@ -40,7 +39,7 @@ class TestReportException:
     def test_warning_severity(self) -> None:
         mock_log = _mock_logger()
         exc = RuntimeError("warn")
-        with patch("app.utils.errors.capture_exception"):
+        with patch("platform.observability.errors.capture_exception"):
             report_exception(exc, logger=mock_log, message="m", severity="warning")
         mock_log.warning.assert_called_once()
         mock_log.error.assert_not_called()
@@ -48,7 +47,7 @@ class TestReportException:
     def test_info_severity_skips_sentry(self) -> None:
         mock_log = _mock_logger()
         exc = OSError("expected fallback")
-        with patch("app.utils.errors.capture_exception") as mock_cap:
+        with patch("platform.observability.errors.capture_exception") as mock_cap:
             report_exception(exc, logger=mock_log, message="handled", severity="info")
         mock_log.info.assert_called_once()
         mock_cap.assert_not_called()
@@ -56,22 +55,22 @@ class TestReportException:
     def test_tags_are_prefixed(self) -> None:
         mock_log = _mock_logger()
         exc = RuntimeError("boom")
-        with patch("app.utils.errors.capture_exception") as mock_cap:
+        with patch("platform.observability.errors.capture_exception") as mock_cap:
             report_exception(
                 exc,
                 logger=mock_log,
                 message="msg",
-                tags={"surface": "cli", "component": "app.cli"},
+                tags={"surface": "cli", "component": "cli"},
             )
         extra = mock_cap.call_args[1]["extra"]
         assert extra["tag.surface"] == "cli"
-        assert extra["tag.component"] == "app.cli"
-        assert mock_cap.call_args[1]["tags"] == {"surface": "cli", "component": "app.cli"}
+        assert extra["tag.component"] == "cli"
+        assert mock_cap.call_args[1]["tags"] == {"surface": "cli", "component": "cli"}
 
     def test_extras_are_merged(self) -> None:
         mock_log = _mock_logger()
         exc = RuntimeError("boom")
-        with patch("app.utils.errors.capture_exception") as mock_cap:
+        with patch("platform.observability.errors.capture_exception") as mock_cap:
             report_exception(
                 exc,
                 logger=mock_log,
@@ -87,7 +86,7 @@ class TestReportException:
     def test_no_tags_or_extras_passes_none(self) -> None:
         mock_log = _mock_logger()
         exc = ValueError("plain")
-        with patch("app.utils.errors.capture_exception") as mock_cap:
+        with patch("platform.observability.errors.capture_exception") as mock_cap:
             report_exception(exc, logger=mock_log, message="msg")
         mock_cap.assert_called_once_with(exc, extra=None)
 
@@ -96,7 +95,7 @@ class TestReportAndSwallow:
     def test_swallows_matching_exception(self) -> None:
         mock_log = _mock_logger()
         with (
-            patch("app.utils.errors.capture_exception"),
+            patch("platform.observability.errors.capture_exception"),
             report_and_swallow(logger=mock_log, message="swallowed"),
         ):
             raise ValueError("silent")
@@ -113,7 +112,7 @@ class TestReportAndSwallow:
         mock_log = _mock_logger()
         exc = RuntimeError("reported")
         with (
-            patch("app.utils.errors.capture_exception") as mock_cap,
+            patch("platform.observability.errors.capture_exception") as mock_cap,
             report_and_swallow(logger=mock_log, message="msg"),
         ):
             _raise(exc)
@@ -123,7 +122,7 @@ class TestReportAndSwallow:
         mock_log = _mock_logger()
         result: list[int] = []
         with (
-            patch("app.utils.errors.capture_exception") as mock_cap,
+            patch("platform.observability.errors.capture_exception") as mock_cap,
             report_and_swallow(logger=mock_log, message="msg"),
         ):
             result.append(1)
@@ -134,7 +133,7 @@ class TestReportAndSwallow:
         mock_log = _mock_logger()
         for exc_type in (ValueError, KeyError):
             with (
-                patch("app.utils.errors.capture_exception"),
+                patch("platform.observability.errors.capture_exception"),
                 report_and_swallow(
                     logger=mock_log,
                     message="multi",
@@ -148,7 +147,7 @@ class TestReportAndReraise:
     def test_propagates_exception(self) -> None:
         mock_log = _mock_logger()
         with (
-            patch("app.utils.errors.capture_exception") as mock_cap,
+            patch("platform.observability.errors.capture_exception") as mock_cap,
             pytest.raises(RuntimeError, match="propagated"),
             report_and_reraise(logger=mock_log, message="reraised"),
         ):
@@ -159,7 +158,7 @@ class TestReportAndReraise:
         mock_log = _mock_logger()
         result: list[int] = []
         with (
-            patch("app.utils.errors.capture_exception") as mock_cap,
+            patch("platform.observability.errors.capture_exception") as mock_cap,
             report_and_reraise(logger=mock_log, message="no error"),
         ):
             result.append(42)
@@ -169,7 +168,7 @@ class TestReportAndReraise:
     def test_logs_before_reraising(self) -> None:
         mock_log = _mock_logger()
         with (
-            patch("app.utils.errors.capture_exception"),
+            patch("platform.observability.errors.capture_exception"),
             pytest.raises(ValueError),
             report_and_reraise(logger=mock_log, message="logged"),
         ):
