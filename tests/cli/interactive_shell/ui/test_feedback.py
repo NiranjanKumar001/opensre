@@ -9,9 +9,11 @@ import pytest
 from rich.console import Console
 
 from app.cli.interactive_shell.ui.feedback import (
+    _CHOICES,
     _format_root_cause_lines,
     _print_context,
     _root_cause_width,
+    _run_select,
 )
 
 
@@ -103,3 +105,31 @@ def test_print_context_shows_full_root_cause_in_stdout_path(
     captured = capsys.readouterr().out
     assert "…" not in captured
     assert " ".join(captured.split()) == ("─" * 60 + " Root cause: " + root + " " + "─" * 60)
+
+
+def test_run_select_returns_highlighted_choice_on_enter(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    calls = {"n": 0}
+
+    def read_then_enter(**_kwargs: object) -> str:
+        calls["n"] += 1
+        return "enter" if calls["n"] > 1 else "down"
+
+    monkeypatch.setattr(
+        "app.cli.interactive_shell.ui.feedback.read_key_unix",
+        read_then_enter,
+    )
+    monkeypatch.setattr("app.cli.interactive_shell.ui.feedback.flush_stdin_unix", lambda: None)
+    monkeypatch.setattr(
+        "app.cli.interactive_shell.ui.feedback.restore_stdin_terminal",
+        lambda: None,
+    )
+
+    assert _run_select(_CHOICES) == "partial"
+    captured = capsys.readouterr().out
+    assert "Partially accurate" in captured
+    assert "↑↓" in captured
