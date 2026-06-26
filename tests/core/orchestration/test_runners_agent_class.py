@@ -97,6 +97,15 @@ def test_run_connected_investigation_uses_default_agent_when_class_omitted() -> 
             return_value={"is_noise": False},
         ),
         patch("core.orchestration.node.plan_actions.plan_actions", return_value={}),
+        # When merged with the upstream base branch, the pipeline resolves the
+        # default agent class via get_investigation_agent_class(), which calls
+        # get_agent_llm() and fails when no LLM API key is set.  Mock it to
+        # return the concrete class so the test can focus on agent_class=None
+        # threading.
+        patch(
+            "core.orchestration.node.investigate.get_investigation_agent_class",
+            return_value=ConnectedInvestigationAgent,
+        ),
         patch(
             "core.orchestration.node.investigate.agent.ConnectedInvestigationAgent.run",
             return_value={},
