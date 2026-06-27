@@ -43,10 +43,14 @@ DEFAULT_INITIAL_BACKOFF_SEC = 2.0
 # multi-second TPM resets, short enough that operator interruption is fast.
 RETRY_AFTER_MAX_SEC = 30.0
 
-# Body-text pattern OpenAI uses: ``"Please try again in 94ms"`` or
-# ``"try again in 36s"``. Anthropic does not include a body hint; relies on
-# the HTTP ``retry-after`` header instead.
-_BODY_RETRY_HINT_RE = re.compile(r"try again in (\d+(?:\.\d+)?)\s*(ms|s)\b", re.IGNORECASE)
+# Body-text patterns providers embed in the error message:
+#   - OpenAI:        ``"Please try again in 94ms"`` / ``"try again in 36s"``
+#   - Google/Gemini: ``"Please retry in 5.478s"``
+# Anthropic does not include a body hint; it relies on the HTTP ``retry-after``
+# header instead.
+_BODY_RETRY_HINT_RE = re.compile(
+    r"(?:try again in|retry in) (\d+(?:\.\d+)?)\s*(ms|s)\b", re.IGNORECASE
+)
 
 # Substrings present in the error text of OpenAI's RateLimitError, Anthropic's
 # RateLimitError, the RuntimeError wrappers opensre's clients raise on top of
@@ -190,18 +194,48 @@ def is_credit_exhausted_error(exc: BaseException) -> bool:
     return any(hint in text for hint in _CREDIT_EXHAUSTED_HINTS)
 
 
+def _structured_retry_delay_seconds(exc: BaseException) -> float | None:
+    """Return Google/Gemini's structured retry hint in seconds, or ``None``.
+
+    Gemini does not set an HTTP ``retry-after`` header. It carries the delay in
+    a ``RetryInfo`` entry of the error body's ``details`` array, e.g.::
+
+        {"error": {"details": [
+            {"@type": ".../google.rpc.RetryInfo", "retryDelay": "5s"},
+        ]}}
+
+    The value is a protobuf ``Duration`` string (``"5s"`` / ``"5.478s"``).
+    """
+    body = getattr(exc, "body", None)
+    if not isinstance(body, dict):
+        return None
+    error_obj = body.get("error")
+    if not isinstance(error_obj, dict):
+        return None
+    for detail in error_obj.get("details") or []:
+        delay = detail.get("retryDelay") if isinstance(detail, dict) else None
+        if delay:
+            match = re.match(r"^(\d+(?:\.\d+)?)\s*s$", str(delay).strip())
+            if match:
+                return float(match.group(1))
+    return None
+
+
 def extract_retry_after_seconds(exc: BaseException) -> float | None:
     """Return the provider-suggested retry delay in seconds, or ``None``.
 
-    Looks in two places, in priority order:
+    Looks in three places, in priority order:
 
       1. The HTTP ``retry-after`` header on the underlying response object.
          Both Anthropic and OpenAI SDK errors expose ``err.response.headers``.
          RFC 7231 allows the value to be either ``"<integer seconds>"`` or
          an HTTP-date; we honor the integer form and skip dates (rare in
          practice and not worth the parsing complexity).
-      2. OpenAI's body-text hint: ``"Please try again in 94ms"``. The
-         regex tolerates either ``ms`` or ``s`` units.
+      2. Google/Gemini's structured ``error.details[].retryDelay`` body hint
+         (Gemini ships no ``retry-after`` header).
+      3. The body-text hint providers embed in the message:
+         OpenAI's ``"Please try again in 94ms"`` or Gemini's
+         ``"Please retry in 5.478s"``. The regex tolerates ``ms`` or ``s``.
 
     The result is capped at :data:`RETRY_AFTER_MAX_SEC` to bound pathological
     cases (a misconfigured proxy returning ``retry-after: 3600`` should not
@@ -225,6 +259,10 @@ def extract_retry_after_seconds(exc: BaseException) -> float | None:
                         return min(seconds, RETRY_AFTER_MAX_SEC)
                 except (ValueError, TypeError):
                     pass  # HTTP-date form; fall through to body parsing.
+
+    structured = _structured_retry_delay_seconds(exc)
+    if structured is not None:
+        return min(structured, RETRY_AFTER_MAX_SEC)
 
     match = _BODY_RETRY_HINT_RE.search(str(exc))
     if match:

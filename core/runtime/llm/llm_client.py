@@ -58,6 +58,7 @@ from config.config import (
 from config.llm_credentials import resolve_llm_api_key
 from config.llm_reasoning_effort import get_active_reasoning_effort
 from core.domain.types.root_cause_categories import VALID_ROOT_CAUSE_CATEGORIES
+from core.runtime.llm.llm_retry import extract_retry_after_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -748,30 +749,6 @@ def _format_openai_connection_error(err: Exception, provider_label: str) -> str:
     )
 
 
-def _parse_retry_after(err: Exception) -> float:
-    """Extract the suggested retry delay in seconds from a RateLimitError.
-
-    Google/Gemini embeds the delay in the error body's ``details`` array as a
-    ``retryDelay`` field (e.g. ``"5s"``), and also in the human-readable
-    message (``"Please retry in 5.478238622s"``).  Returns 0 if nothing is
-    found so callers can fall back to their own backoff.
-    """
-    body = getattr(err, "body", None)
-    if isinstance(body, dict):
-        error_obj = body.get("error", {})
-        if isinstance(error_obj, dict):
-            for detail in error_obj.get("details", []):
-                delay_str = detail.get("retryDelay", "")
-                if delay_str:
-                    m = re.search(r"^(\d+(?:\.\d+)?)\s*s$", str(delay_str).strip())
-                    if m:
-                        return min(float(m.group(1)), 60.0)
-    m = re.search(r"[Rr]etry in (\d+(?:\.\d+)?)s", str(err))
-    if m:
-        return min(float(m.group(1)), 60.0)
-    return 0.0
-
-
 def _uses_max_completion_tokens(model: str) -> bool:
     """Reasoning models (o1, o3, o4, gpt-5 series) require max_completion_tokens."""
     return model.startswith(("o1", "o3", "o4", "gpt-5"))
@@ -959,7 +936,7 @@ class OpenAILLMClient:
                         f"{self._provider_label} rate limit exceeded (HTTP 429) after multiple retries. "
                         "Check your quota and billing details."
                     ) from err
-                suggested = _parse_retry_after(err)
+                suggested = extract_retry_after_seconds(err) or 0.0
                 wait = max(suggested, backoff_seconds)
                 time.sleep(wait)
                 backoff_seconds = wait * 2
@@ -1096,7 +1073,7 @@ class OpenAILLMClient:
                         f"{self._provider_label} rate limit exceeded (HTTP 429) after multiple retries. "
                         "Check your quota and billing details."
                     ) from err
-                suggested = _parse_retry_after(err)
+                suggested = extract_retry_after_seconds(err) or 0.0
                 wait = max(suggested, backoff_seconds)
                 time.sleep(wait)
                 backoff_seconds = wait * 2

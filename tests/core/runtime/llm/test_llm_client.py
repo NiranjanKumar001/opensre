@@ -1328,47 +1328,10 @@ def test_anthropic_invoke_stream_not_found_raises_friendly_runtime_error(monkeyp
 
 
 # ---------------------------------------------------------------------------
-# _parse_retry_after — retry delay extraction
-# ---------------------------------------------------------------------------
-
-
-def test_parse_retry_after_reads_body_details() -> None:
-    """Extracts retryDelay from a Google/Gemini-style error body."""
-
-    class _FakeErr(Exception):
-        body = {
-            "error": {
-                "details": [
-                    {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "5s"},
-                ]
-            }
-        }
-
-    assert llm_client._parse_retry_after(_FakeErr()) == 5.0
-
-
-def test_parse_retry_after_reads_message_fallback() -> None:
-    """Falls back to parsing 'retry in Xs' from the error message string."""
-    err = Exception("Please retry in 8.5s due to quota exceeded")
-    assert llm_client._parse_retry_after(err) == 8.5
-
-
-def test_parse_retry_after_caps_at_sixty_seconds() -> None:
-    """Never returns more than 60 seconds to prevent runaway waits."""
-
-    class _FakeErr(Exception):
-        body = {"error": {"details": [{"retryDelay": "120s"}]}}
-
-    assert llm_client._parse_retry_after(_FakeErr()) == 60.0
-
-
-def test_parse_retry_after_returns_zero_when_no_hint() -> None:
-    """Returns 0 when neither body nor message contains a delay."""
-    assert llm_client._parse_retry_after(Exception("quota exceeded")) == 0.0
-
-
-# ---------------------------------------------------------------------------
 # OpenAILLMClient.invoke — RateLimitError handling
+#
+# Retry-delay extraction (Gemini retryDelay, headers, body text) is unit-tested
+# in tests/utils/test_llm_retry.py against the shared extract_retry_after_seconds.
 # ---------------------------------------------------------------------------
 
 
