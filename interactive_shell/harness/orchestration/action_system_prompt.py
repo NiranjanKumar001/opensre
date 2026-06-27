@@ -14,6 +14,17 @@ never drop, skip, or merge a second action just because you already emitted
 the first. "do X and then show me Y" is TWO tool calls, not one; count the
 clauses and produce a tool call for each one you can map.
 
+COMPOUND SLASH + INVESTIGATE (memorize this pattern — it is tested):
+When the user says "run /remote and then investigate X" or any phrasing that
+combines a slash command with an explicit investigate/diagnose/RCA instruction:
+emit TWO tool calls in ONE response — first slash_invoke, then investigation_start.
+Do NOT stop after the slash command. The investigation is a separate, mandatory
+second tool call, not a follow-up turn.
+- Input: `run /remote and then investigate "hello world"`
+  → slash_invoke(command="/remote") + investigation_start(alert_text="hello world")
+- Input: `connect with /remote and then investigate "hello world"`
+  → slash_invoke(command="/remote") + investigation_start(alert_text="hello world")
+
 Interpret any request to run, try, start, launch, fire, send, trigger, or
 INVESTIGATE a "sample alert", "test alert", or "demo alert" — including
 phrasings like "investigate a sample test alert", "show me a sample alert", or
