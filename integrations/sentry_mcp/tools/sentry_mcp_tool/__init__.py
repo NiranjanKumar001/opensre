@@ -71,9 +71,10 @@ def _map_call_sentry_tool(
             )
 
     label = f"Sentry MCP: {mcp_tool}" if mcp_tool else "Sentry MCP Result"
+    source = f"call_sentry_tool:{mcp_tool}" if mcp_tool else "call_sentry_tool"
     record_evidence_entry(
         evidence,
-        source="call_sentry_tool",
+        source=source,
         label=label,
         summary=summary_text,
     )

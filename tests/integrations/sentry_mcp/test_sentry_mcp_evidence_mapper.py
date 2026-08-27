@@ -35,7 +35,7 @@ def test_map_call_sentry_tool_with_text() -> None:
 
     entries = evidence.get("catalog_entries", [])
     assert len(entries) == 1
-    assert entries[0]["source"] == "call_sentry_tool"
+    assert entries[0]["source"] == "call_sentry_tool:get_issue_details"
     assert entries[0]["label"] == "Sentry MCP: get_issue_details"
     assert "Unhandled TypeError" in entries[0]["summary"]
 
@@ -52,23 +52,30 @@ def test_map_call_sentry_tool_with_structured_content() -> None:
 
     entries = evidence.get("catalog_entries", [])
     assert len(entries) == 1
-    assert entries[0]["source"] == "call_sentry_tool"
+    assert entries[0]["source"] == "call_sentry_tool:search_issues"
     assert entries[0]["label"] == "Sentry MCP: search_issues"
 
 
-def test_map_call_sentry_tool_via_merge_tool_evidence() -> None:
-    """Test evidence pipeline integration through merge_tool_evidence."""
+def test_map_call_sentry_tool_via_merge_tool_evidence_multiple_tools() -> None:
+    """Test evidence pipeline integration preserves distinct Sentry MCP tool invocations."""
     evidence: dict[str, Any] = {}
-    output: dict[str, Any] = {
+    output_1: dict[str, Any] = {
+        "available": True,
+        "tool": "get_issue_details",
+        "text": "Unhandled TypeError in main",
+    }
+    output_2: dict[str, Any] = {
         "available": True,
         "tool": "seer_analyze_issue",
         "text": "Root cause identified in commit abc1234",
     }
-    merge_tool_evidence(evidence, "call_sentry_tool", output, {"tool_name": "seer_analyze_issue"})
+    merge_tool_evidence(evidence, "call_sentry_tool", output_1, {"tool_name": "get_issue_details"})
+    merge_tool_evidence(evidence, "call_sentry_tool", output_2, {"tool_name": "seer_analyze_issue"})
 
     entries = evidence.get("catalog_entries", [])
-    assert len(entries) == 1
-    assert entries[0]["source"] == "call_sentry_tool"
+    assert len(entries) == 2
+    assert entries[0]["source"] == "call_sentry_tool:get_issue_details"
+    assert entries[1]["source"] == "call_sentry_tool:seer_analyze_issue"
 
 
 def test_map_call_sentry_tool_ignores_empty_or_unavailable() -> None:
