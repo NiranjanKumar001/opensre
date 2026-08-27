@@ -40,6 +40,59 @@ _COMPONENT = "integrations.sentry_mcp.tools.sentry_mcp_tool"
 _SUMMARY_TRUNCATE_LEN = 120
 
 
+def _build_evidence_source(
+    evidence: dict[str, Any],
+    mcp_tool: str,
+    tool_input: dict[str, Any],
+    output: dict[str, Any],
+) -> str:
+    base = f"call_sentry_tool:{mcp_tool}" if mcp_tool else "call_sentry_tool"
+    discriminator = ""
+    args = tool_input.get("arguments") or tool_input.get("args") or tool_input
+    if isinstance(args, dict):
+        for key in (
+            "issue_id",
+            "event_id",
+            "group_id",
+            "query",
+            "project",
+            "slug",
+            "organization_slug",
+        ):
+            if args.get(key):
+                discriminator = str(args[key])
+                break
+    if not discriminator and isinstance(output, dict) and isinstance(output.get("arguments"), dict):
+        output_args = output.get("arguments")
+        if isinstance(output_args, dict):
+            for key in (
+                "issue_id",
+                "event_id",
+                "group_id",
+                "query",
+                "project",
+                "slug",
+                "organization_slug",
+            ):
+                if output_args.get(key):
+                    discriminator = str(output_args[key])
+                    break
+    candidate = f"{base}:{discriminator}" if discriminator else base
+
+    existing_entries = evidence.get("catalog_entries")
+    if not isinstance(existing_entries, list):
+        return candidate
+
+    existing_sources = {e.get("source") for e in existing_entries if isinstance(e, dict)}
+    if candidate not in existing_sources:
+        return candidate
+
+    count = 1
+    while f"{candidate}:{count}" in existing_sources:
+        count += 1
+    return f"{candidate}:{count}"
+
+
 def _map_call_sentry_tool(
     evidence: dict[str, Any], output: dict[str, Any], _tool_input: dict[str, Any]
 ) -> None:
@@ -71,7 +124,7 @@ def _map_call_sentry_tool(
             )
 
     label = f"Sentry MCP: {mcp_tool}" if mcp_tool else "Sentry MCP Result"
-    source = f"call_sentry_tool:{mcp_tool}" if mcp_tool else "call_sentry_tool"
+    source = _build_evidence_source(evidence, mcp_tool, _tool_input, output)
     record_evidence_entry(
         evidence,
         source=source,

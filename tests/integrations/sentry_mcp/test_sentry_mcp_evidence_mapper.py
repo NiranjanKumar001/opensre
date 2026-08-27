@@ -78,6 +78,38 @@ def test_map_call_sentry_tool_via_merge_tool_evidence_multiple_tools() -> None:
     assert entries[1]["source"] == "call_sentry_tool:seer_analyze_issue"
 
 
+def test_map_call_sentry_tool_repeated_same_tool_no_collision() -> None:
+    """Test that multiple calls to the exact same tool with different args do not collide."""
+    evidence: dict[str, Any] = {}
+    output_1: dict[str, Any] = {
+        "available": True,
+        "tool": "get_issue_details",
+        "text": "Issue 101: TypeError in payment service",
+    }
+    output_2: dict[str, Any] = {
+        "available": True,
+        "tool": "get_issue_details",
+        "text": "Issue 202: NullPointerException in auth service",
+    }
+    merge_tool_evidence(
+        evidence,
+        "call_sentry_tool",
+        output_1,
+        {"tool_name": "get_issue_details", "arguments": {"issue_id": "101"}},
+    )
+    merge_tool_evidence(
+        evidence,
+        "call_sentry_tool",
+        output_2,
+        {"tool_name": "get_issue_details", "arguments": {"issue_id": "202"}},
+    )
+
+    entries = evidence.get("catalog_entries", [])
+    assert len(entries) == 2
+    assert entries[0]["source"] == "call_sentry_tool:get_issue_details:101"
+    assert entries[1]["source"] == "call_sentry_tool:get_issue_details:202"
+
+
 def test_map_call_sentry_tool_ignores_empty_or_unavailable() -> None:
     """Test that unavailable, empty, or error outputs produce no evidence entries."""
     evidence: dict[str, Any] = {}
