@@ -9,6 +9,9 @@ individual MCP-side tools.
 
 from __future__ import annotations
 
+from typing import Any
+
+from core.domain.types.evidence import record_evidence_entry
 from core.domain.types.tools import ToolSurface
 from core.tool import report_run_error
 from core.tool_framework import tool
@@ -18,6 +21,7 @@ from core.tool_framework.utils import (
     first_string,
     unavailable_response,
 )
+from infrastructure.text.truncation import truncate
 from integrations.sentry_mcp import (
     SentryMCPConfig,
     SentryMCPToolCallResult,
@@ -33,6 +37,46 @@ SentryMCPParams = dict[str, object]
 SentryMCPResponse = dict[str, object]
 
 _COMPONENT = "integrations.sentry_mcp.tools.sentry_mcp_tool"
+_SUMMARY_TRUNCATE_LEN = 120
+
+
+def _map_call_sentry_tool(
+    evidence: dict[str, Any], output: dict[str, Any], _tool_input: dict[str, Any]
+) -> None:
+    """Record Sentry MCP execution output into the report evidence catalog."""
+    if output.get("available") is False or output.get("error") or output.get("is_error"):
+        return
+
+    mcp_tool = str(output.get("tool") or _tool_input.get("tool_name") or "").strip()
+    raw_text = output.get("text")
+    structured = output.get("structured_content")
+    content = output.get("content")
+
+    if raw_text and isinstance(raw_text, str) and raw_text.strip():
+        summary_text = truncate(raw_text.replace("\n", " ").strip(), _SUMMARY_TRUNCATE_LEN)
+    elif structured:
+        summary_text = truncate(str(structured).replace("\n", " ").strip(), _SUMMARY_TRUNCATE_LEN)
+    elif isinstance(content, list) and content:
+        summary_text = f"{len(content)} item(s)"
+    else:
+        non_empty = [v for k, v in output.items() if k not in ("available", "source", "tool") and v]
+        if not non_empty:
+            return
+        first_val = non_empty[0]
+        if isinstance(first_val, list):
+            summary_text = f"{len(first_val)} item(s)"
+        else:
+            summary_text = truncate(
+                str(first_val).replace("\n", " ").strip(), _SUMMARY_TRUNCATE_LEN
+            )
+
+    label = f"Sentry MCP: {mcp_tool}" if mcp_tool else "Sentry MCP Result"
+    record_evidence_entry(
+        evidence,
+        source="call_sentry_tool",
+        label=label,
+        summary=summary_text,
+    )
 
 
 def _unavailable_response(
@@ -110,6 +154,25 @@ def _normalize_tool_result(result: SentryMCPToolCallResult) -> SentryMCPResponse
     }
 
 
+def _map_list_sentry_tools(
+    evidence: dict[str, Any], output: dict[str, Any], _tool_input: dict[str, Any]
+) -> None:
+    """Record available Sentry MCP tools listing into evidence."""
+    if not output.get("available"):
+        return
+
+    tools = output.get("tools")
+    if not isinstance(tools, list) or not tools:
+        return
+
+    record_evidence_entry(
+        evidence,
+        source="list_sentry_tools",
+        label="Sentry MCP Tools",
+        summary=f"{len(tools)} Sentry MCP tool(s) available",
+    )
+
+
 @tool(
     name="list_sentry_tools",
     source="sentry_mcp",
@@ -153,6 +216,7 @@ def _normalize_tool_result(result: SentryMCPToolCallResult) -> SentryMCPResponse
     },
     is_available=_sentry_mcp_available,
     extract_params=_sentry_mcp_extract_params,
+    evidence_mapper=_map_list_sentry_tools,
 )
 def list_sentry_tools(
     name_filter: str | None = None,
@@ -246,6 +310,7 @@ def list_sentry_tools(
     },
     is_available=_sentry_mcp_available,
     extract_params=_sentry_mcp_extract_params,
+    evidence_mapper=_map_call_sentry_tool,
 )
 def call_sentry_tool(
     tool_name: str | None = None,
